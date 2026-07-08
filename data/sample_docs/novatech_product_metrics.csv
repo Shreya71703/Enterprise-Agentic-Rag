@@ -1,0 +1,19 @@
+product_id,product_name,category,monthly_revenue_usd,active_users,churn_rate_pct,nps_score,avg_response_time_ms,region
+CORTEX-001,Cortex NLP Engine,AI Platform,18500000,12400,2.1,74,145,North America
+CORTEX-002,Cortex Vision AI,AI Platform,8200000,5600,3.4,68,210,North America
+CORTEX-003,Cortex Predictive,AI Platform,6100000,3200,2.8,71,180,North America
+CORTEX-004,Cortex RAG Suite,AI Platform,4800000,2800,1.5,78,120,North America
+DATA-001,DataFlow Analytics,Data Analytics,5200000,8900,4.2,62,95,Global
+DATA-002,DataLens BI,Data Analytics,3900000,6700,3.8,65,110,Global
+DATA-003,DataGuard Compliance,Data Analytics,2100000,4200,2.5,70,85,Global
+TRAIN-001,AI Academy Online,Training,1200000,15600,5.1,58,200,Global
+TRAIN-002,Cortex Certification,Training,890000,3400,3.2,72,150,Global
+SERVICES-001,Implementation Package,Professional Services,3200000,523,1.8,75,N/A,Global
+SERVICES-002,Custom Model Training,Professional Services,2800000,180,2.0,73,N/A,Global
+SERVICES-003,Managed AI Operations,Professional Services,1500000,95,1.2,80,N/A,North America
+CORTEX-005,Cortex NLP Engine,AI Platform,12300000,8900,2.5,72,155,EMEA
+CORTEX-006,Cortex Vision AI,AI Platform,5100000,3200,3.8,66,225,EMEA
+CORTEX-007,Cortex RAG Suite,AI Platform,3200000,1800,1.8,76,130,EMEA
+CORTEX-008,Cortex NLP Engine,AI Platform,9800000,7100,2.3,70,165,APAC
+CORTEX-009,Cortex Vision AI,AI Platform,4200000,2800,3.6,64,240,APAC
+CORTEX-010,Cortex RAG Suite,AI Platform,2100000,1200,2.0,74,135,APAC
