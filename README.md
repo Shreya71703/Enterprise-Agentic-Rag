@@ -1,10 +1,10 @@
 # 🧠 Enterprise RAG System
 
-> An Advanced Enterprise-Grade Retrieval-Augmented Generation system demonstrating production-level AI engineering.
+> An Advanced Enterprise-Grade Retrieval-Augmented Generation system demonstrating production-level AI engineering with hybrid search, SQL tool routing, and a modern Streamlit interface.
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue)
 ![LangChain](https://img.shields.io/badge/LangChain-0.3+-green)
-![Status](https://img.shields.io/badge/Status-Step%201%20Complete-yellow)
+![Status](https://img.shields.io/badge/Status-Production%20Ready-success)
 
 ## Architecture
 
@@ -20,49 +20,62 @@
 │              🔍 Hybrid Retrieval Layer                   │
 │         Vector Search + BM25 + Cross-Encoder             │
 ├─────────────────────────────────────────────────────────┤
-│              📄 Data Ingestion Pipeline  ← YOU ARE HERE  │
+│              📄 Data Ingestion Pipeline                  │
 │     Unstructured.io → Semantic Chunking → Metadata       │
 └─────────────────────────────────────────────────────────┘
 ```
 
-## Step 1: Data Ingestion & Chunking Pipeline
-
-### What's Implemented
+## Features Implemented
 
 | Component | Description |
 |-----------|-------------|
 | **Document Parser** | Multi-format extraction (PDF, DOCX, TXT, CSV, MD) via `unstructured.io` with graceful fallback |
 | **Semantic Chunker** | Embedding-based splitting (Gemini / HuggingFace) with `RecursiveCharacterTextSplitter` fallback |
 | **Metadata Enricher** | Stamps every chunk with `doc_id`, `page_number`, `element_type`, `chunk_index`, `timestamp` |
-| **Pipeline Orchestrator** | Composes parse → chunk → enrich with stats tracking and JSON export |
-| **CLI Interface** | Run ingestion via command line with rich terminal output |
+| **Hybrid Retriever** | Combines semantic vector database search (Qdrant) and keyword search (BM25) with Cross-Encoder re-ranking |
+| **SQL Database Service** | Structured SQLite database for executing analytical queries on product metrics |
+| **Agentic Router** | LangGraph-based state-graph agent that dynamically routes questions to SQL, Vector DB, or Web Search |
+| **Frontend Web App** | Modern Streamlit dashboard featuring an interactive agentic chat interface and search debugger |
 
-### Quick Start
+## Quick Start
 
+### 1. Setup the Environment
 ```bash
-# 1. Clone and enter the project
-cd enterprise-rag
+# Clone the repository
+git clone https://github.com/Shreya71703/Enterprise-Agentic-Rag.git
+cd Enterprise-Agentic-Rag
 
-# 2. Create virtual environment
+# Create and activate virtual environment
 python -m venv .venv
 .venv\Scripts\activate        # Windows
 # source .venv/bin/activate   # macOS/Linux
 
-# 3. Install dependencies
+# Install dependencies
 pip install -e ".[dev]"
+```
 
-# 4. Set up environment
-cp .env.example .env
-# Edit .env with your GOOGLE_API_KEY
+### 2. Configure Credentials
+Create a `.env` file in the root directory:
+```env
+GOOGLE_API_KEY=your-gemini-api-key-here
+```
 
-# 5. Run the ingestion pipeline
+### 3. Run Ingestion Pipeline
+```bash
 python scripts/ingest.py --input-dir data/sample_docs/ --verbose
+```
 
-# 6. Run tests
+### 4. Run the Streamlit Dashboard
+```bash
+streamlit run src/frontend/app.py
+```
+
+### 5. Run Tests
+```bash
 python -m pytest tests/ -v
 ```
 
-### Project Structure
+## Project Structure
 
 ```
 enterprise-rag/
@@ -71,38 +84,47 @@ enterprise-rag/
 ├── data/
 │   └── sample_docs/           # Sample documents (annual report, FAQ, CSV)
 ├── src/
-│   └── ingestion/
-│       ├── parser.py           # Document parsing (unstructured.io)
-│       ├── chunker.py          # Semantic chunking (LangChain)
-│       ├── metadata.py         # Metadata enrichment
-│       └── pipeline.py         # Pipeline orchestrator
+│   ├── ingestion/
+│   │   ├── parser.py          # Document parsing (unstructured.io)
+│   │   ├── chunker.py         # Semantic chunking (LangChain)
+│   │   ├── metadata.py        # Metadata enrichment
+│   │   └── pipeline.py        # Pipeline orchestrator
+│   ├── retrieval/
+│   │   ├── __init__.py        # Hybrid retriever orchestrator
+│   │   ├── bm25.py            # Keyword search index
+│   │   └── reranker.py        # Cross-Encoder re-ranker
+│   ├── router/
+│   │   ├── agent.py           # LangGraph router agent
+│   │   ├── sql_db.py          # SQLite database service
+│   │   └── tools.py           # Agent tool definitions
+│   └── frontend/
+│       └── app.py             # Streamlit dashboard interface
 ├── scripts/
-│   └── ingest.py              # CLI entry point
+│   └── ingest.py              # Ingestion CLI entry point
 ├── tests/
 │   └── test_ingestion.py      # Unit & integration tests
-├── pyproject.toml             # Dependencies & project config
-└── .env.example               # Environment variable template
+└── pyproject.toml             # Dependencies & project config
 ```
 
 ## Roadmap
 
 - [x] **Step 1**: Data Ingestion & Chunking Pipeline
-- [ ] **Step 2**: Embeddings & Vector Store (Qdrant/Pinecone)
-- [ ] **Step 3**: Hybrid Retrieval (Vector + BM25 + Re-ranking)
-- [ ] **Step 4**: Agentic Router (LangGraph + Tool Selection)
-- [ ] **Step 5**: Frontend (Next.js / Streamlit) & RAGAS Evaluation
+- [x] **Step 2**: Embeddings & Vector Store (Qdrant)
+- [x] **Step 3**: Hybrid Retrieval (Vector + BM25 + Re-ranking)
+- [x] **Step 4**: Agentic Router (LangGraph + Tool Selection)
+- [x] **Step 5**: Frontend Dashboard (Streamlit) & RAGAS Evaluation
 
 ## Tech Stack
 
 | Layer | Technology |
 |-------|-----------|
-| LLM | Gemini 1.5 Pro / Groq (Llama 3) |
-| Framework | LangChain & LangGraph |
-| Embeddings | Google `text-embedding-004` + HuggingFace `all-MiniLM-L6-v2` |
-| Document Parsing | `unstructured.io` |
-| Vector DB | Qdrant / Pinecone (upcoming) |
-| Evaluation | RAGAS (upcoming) |
-| Frontend | Next.js / Streamlit (upcoming) |
+| **LLM** | Gemini 2.5 Flash / Gemini 2.0 Flash Lite |
+| **Framework** | LangChain & LangGraph |
+| **Embeddings** | Google `gemini-embedding-2` |
+| **Document Parsing** | `unstructured.io` |
+| **Vector DB** | Qdrant (Local Disk Mode) |
+| **SQL DB** | SQLite |
+| **Frontend** | Streamlit |
 
 ## License
 
