@@ -101,20 +101,18 @@ st.markdown(
     </style>
     """,
     unsafe_allow_html=True,
-)
 
 
 # ---------------------------------------------------------------------------
-# Lazy Backend Initialization (cached — only runs ONCE ever)
+# Backend Initialization (cached — only runs ONCE across all sessions)
 # ---------------------------------------------------------------------------
 @st.cache_resource(show_spinner=False)
 def _init_backend():
     """
-    Lazily import and initialize all heavy backend services.
-    This function is cached by Streamlit so it only executes once
-    across all sessions and page reruns.
+    Import and initialize all heavy backend services.
+    Cached by Streamlit — executes once, then returns instantly.
     """
-    from src.router.tools import bootstrap_tools, _retriever, _sql_db
+    from src.router.tools import bootstrap_tools
     from src.router.agent import AgenticRouter
 
     bootstrap_tools()
@@ -128,20 +126,9 @@ def _init_backend():
     return router, retriever, sql_db
 
 
-def _get_backend():
-    """Get or initialize backend — shows a branded loading screen on first call."""
-    if "backend_ready" not in st.session_state:
-        # Show a loading placeholder while backend initializes
-        loading = st.empty()
-        loading.markdown(
-            '<div class="loading-text">🧠 Initializing Enterprise RAG Engine...</div>',
-            unsafe_allow_html=True,
-        )
-        result = _init_backend()
-        loading.empty()
-        st.session_state["backend_ready"] = True
-        return result
-    return _init_backend()
+# Run backend init immediately at page load (shows a top-level spinner)
+with st.spinner("🧠 Loading Enterprise RAG Engine..."):
+    _router, _retriever, _sql_db = _init_backend()
 
 
 # ---------------------------------------------------------------------------
@@ -163,36 +150,28 @@ with st.sidebar:
     st.caption("Production-Grade Retrieval-Augmented Generation")
     st.markdown("---")
 
-    # DB Stats (only show after backend is ready)
+    # DB Stats
     st.subheader("📊 Database Statistics")
-    if "backend_ready" in st.session_state:
-        _, retriever, sql_db = _init_backend()
-        if retriever and retriever.vector_store.collection_exists():
-            try:
-                info = retriever.vector_store.get_collection_info()
-                st.metric("Vector Points", info["points_count"])
-                st.metric("Vector Dimensions", info["dimension"])
-                st.caption(f"Qdrant collection: `{info['name']}`")
-            except Exception:
-                st.warning("Failed to load Qdrant statistics.")
-        else:
-            st.info("Qdrant collection loading...")
+    if _retriever and _retriever.vector_store.collection_exists():
+        try:
+            info = _retriever.vector_store.get_collection_info()
+            st.metric("Vector Points", info["points_count"])
+            st.metric("Vector Dimensions", info["dimension"])
+            st.caption(f"Qdrant collection: `{info['name']}`")
+        except Exception:
+            st.warning("Failed to load Qdrant statistics.")
     else:
-        st.info("⏳ Backend initializing...")
+        st.info("Qdrant collection not found.")
 
     st.markdown("---")
 
     # SQL Schema Explorer
     st.subheader("💾 SQL Schema Explorer")
-    if "backend_ready" in st.session_state:
-        _, _, sql_db = _init_backend()
-        if sql_db:
-            with st.expander("Show `product_metrics` Table"):
-                st.code(sql_db.get_schema(), language="sql")
-        else:
-            st.caption("SQL DB not loaded.")
+    if _sql_db:
+        with st.expander("Show `product_metrics` Table"):
+            st.code(_sql_db.get_schema(), language="sql")
     else:
-        st.caption("⏳ Waiting for backend...")
+        st.caption("SQL DB not loaded.")
 
     st.markdown("---")
 
@@ -239,8 +218,6 @@ with tab_chat:
             response_placeholder = st.empty()
             with st.spinner("Agentic router thinking & retrieving..."):
                 try:
-                    # Initialize backend on first query (instant on subsequent)
-                    router, _, _ = _get_backend()
                     history = st.session_state["chat_history"]
 
                     # Retry logic for rate limits
@@ -249,7 +226,7 @@ with tab_chat:
                     response = None
                     for attempt in range(max_retries):
                         try:
-                            response = router.query(prompt, history=history)
+                            response = _router.query(prompt, history=history)
                             break
                         except Exception as retry_err:
                             err_str = str(retry_err)
@@ -290,16 +267,15 @@ with tab_debug:
     debug_k = st.slider("Docs to return (Top-K)", 1, 5, 3)
 
     if st.button("🔍 Run Comparison Search") and debug_query:
-        _, retriever, _ = _get_backend()
-        if retriever:
+        if _retriever:
             col1, col2, col3 = st.columns(3)
 
             # 1. Semantic Search
             with col1:
                 st.markdown("#### 📡 1. Semantic Vector Search")
                 try:
-                    query_emb = retriever.embedding_service.embed_query(debug_query)
-                    vector_raw = retriever.vector_store.search_with_documents(query_emb, top_k=debug_k)
+                    query_emb = _retriever.embedding_service.embed_query(debug_query)
+                    vector_raw = _retriever.vector_store.search_with_documents(query_emb, top_k=debug_k)
                     if not vector_raw:
                         st.info("No semantic results found.")
                     for idx, (doc, score) in enumerate(vector_raw, 1):
@@ -313,7 +289,7 @@ with tab_debug:
             with col2:
                 st.markdown("#### ⌨️ 2. BM25 Keyword Search")
                 try:
-                    bm25_raw = retriever.bm25.search(debug_query, top_k=debug_k)
+                    bm25_raw = _retriever.bm25.search(debug_query, top_k=debug_k)
                     if not bm25_raw:
                         st.info("No keyword results found.")
                     for idx, (doc, score) in enumerate(bm25_raw, 1):
@@ -327,7 +303,7 @@ with tab_debug:
             with col3:
                 st.markdown("#### 🏆 3. Hybrid + Re-ranked")
                 try:
-                    hybrid_raw = retriever.retrieve(debug_query, top_k=debug_k, use_reranking=True)
+                    hybrid_raw = _retriever.retrieve(debug_query, top_k=debug_k, use_reranking=True)
                     if not hybrid_raw:
                         st.info("No hybrid results found.")
                     for idx, (doc, score) in enumerate(hybrid_raw, 1):

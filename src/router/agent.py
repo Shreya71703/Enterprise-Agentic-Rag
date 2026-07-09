@@ -64,31 +64,16 @@ def create_router_llm(google_api_key: str | None = None) -> BaseChatModel:
 
     from langchain_google_genai import ChatGoogleGenerativeAI
 
-    # Model priority: try gemini-2.5-flash first (highest free-tier quota),
-    # then gemini-2.0-flash-lite as fallback
-    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash-lite", "gemini-2.0-flash"]
-    
-    for model_name in models_to_try:
-        try:
-            model = ChatGoogleGenerativeAI(
-                model=model_name,
-                google_api_key=key,
-                temperature=0.0,
-                max_retries=3,
-            )
-            logger.info(f"✅ Router LLM initialized: {model_name}")
-            return model
-        except Exception as e:
-            logger.warning(f"⚠️  Failed to initialize {model_name}: {e}")
-            continue
-    
-    # If all fail, return the first one anyway and let it error at runtime
+    # Model priority: gemini-2.0-flash-lite first (fastest, ~0.5s latency,
+    # separate free-tier quota). gemini-2.5-flash is a "thinking" model with
+    # 5-15s internal reasoning overhead — overkill for routing tasks.
     model = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
+        model="gemini-2.0-flash-lite",
         google_api_key=key,
         temperature=0.0,
         max_retries=3,
     )
+    logger.info("✅ Router LLM initialized: gemini-2.0-flash-lite")
     return model
 
 
