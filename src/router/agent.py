@@ -65,8 +65,10 @@ def create_router_llm(google_api_key: str | None = None) -> BaseChatModel:
     from langchain_google_genai import ChatGoogleGenerativeAI
 
     # Create multiple models for runtime fallback when rate-limited.
-    # Each has a separate free-tier quota bucket.
-    model_names = ["gemini-2.0-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash"]
+    # We set max_retries=0 to fail fast and instantly fallback without delay.
+    # Priorities: gemini-2.5-flash (highest availability/quota), 
+    # gemini-2.0-flash-lite (fast fallback), gemini-2.0-flash (additional fallback)
+    model_names = ["gemini-2.5-flash", "gemini-2.0-flash-lite", "gemini-2.0-flash"]
     models = []
     for name in model_names:
         try:
@@ -74,6 +76,7 @@ def create_router_llm(google_api_key: str | None = None) -> BaseChatModel:
                 model=name,
                 google_api_key=key,
                 temperature=0.0,
+                max_retries=0,  # CRITICAL: Fail fast so we don't hang on rate-limited models
             )
             models.append((name, m))
             logger.info(f"✅ Registered model: {name}")
@@ -82,8 +85,8 @@ def create_router_llm(google_api_key: str | None = None) -> BaseChatModel:
 
     if not models:
         logger.error("❌ No Gemini models could be initialized!")
-        models = [("gemini-2.0-flash-lite", ChatGoogleGenerativeAI(
-            model="gemini-2.0-flash-lite", google_api_key=key, temperature=0.0,
+        models = [("gemini-2.5-flash", ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash", google_api_key=key, temperature=0.0, max_retries=0,
         ))]
 
     # Store all models on the primary one for fallback access
