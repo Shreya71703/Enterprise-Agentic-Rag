@@ -64,36 +64,31 @@ def create_router_llm(google_api_key: str | None = None) -> BaseChatModel:
 
     from langchain_google_genai import ChatGoogleGenerativeAI
 
-    # Create multiple models for runtime fallback when rate-limited.
-    # We set max_retries=0 to fail fast and instantly fallback without delay.
-    # Priorities: gemini-2.5-flash (highest availability/quota), 
-    # gemini-2.0-flash-lite (fast fallback), gemini-2.0-flash (additional fallback)
-    model_names = ["gemini-2.5-flash", "gemini-2.0-flash-lite", "gemini-2.0-flash"]
-    models = []
-    for name in model_names:
-        try:
-            m = ChatGoogleGenerativeAI(
-                model=name,
-                google_api_key=key,
-                temperature=0.0,
-                max_retries=0,  # CRITICAL: Fail fast so we don't hang on rate-limited models
-            )
-            models.append((name, m))
-            logger.info(f"✅ Registered model: {name}")
-        except Exception as e:
-            logger.warning(f"⚠️  Skipping {name}: {e}")
+    # Instantiate ONLY the primary model on startup to save ~3.5 seconds.
+    # Other fallback models will be instantiated lazily only if a 429 occurs.
+    primary_name = "gemini-2.5-flash"
+    try:
+        model = ChatGoogleGenerativeAI(
+            model=primary_name,
+            google_api_key=key,
+            temperature=0.0,
+            max_retries=0,  # CRITICAL: Fail fast so we don't hang
+        )
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize primary Gemini model: {e}")
+        # Fallback to lite model
+        primary_name = "gemini-2.0-flash-lite"
+        model = ChatGoogleGenerativeAI(
+            model=primary_name,
+            google_api_key=key,
+            temperature=0.0,
+            max_retries=0,
+        )
 
-    if not models:
-        logger.error("❌ No Gemini models could be initialized!")
-        models = [("gemini-2.5-flash", ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash", google_api_key=key, temperature=0.0, max_retries=0,
-        ))]
-
-    # Store all models on the primary one for fallback access
-    primary_name, primary_model = models[0]
-    primary_model._fallback_models = models  # type: ignore[attr-defined]
-    logger.info(f"✅ Primary router LLM: {primary_name} ({len(models)} fallbacks)")
-    return primary_model
+    # Set fallback model names for lazy instantiation on the primary model
+    model._fallback_model_names = ["gemini-2.0-flash-lite", "gemini-2.0-flash"]  # type: ignore[attr-defined]
+    logger.info(f"✅ Primary router LLM initialized: {primary_name} (fallbacks deferred)")
+    return model
 
 
 # ---------------------------------------------------------------------------
@@ -232,14 +227,39 @@ class AgenticRouter:
             messages.extend(history)
         messages.append(HumanMessage(content=user_query))
 
-        # Try each registered model on rate limit failures
-        fallback_models = getattr(self.llm, '_fallback_models', [(self.llm._llm_type, self.llm)])
-        last_error = None
+        # Try each model on rate limit failures
+        fallback_names = getattr(self.llm, '_fallback_model_names', [])
+        primary_name = getattr(self.llm, 'model_name', 'gemini-2.5-flash')
+        
+        # Build models sequence: (model_name, model_instance)
+        models_to_try = [(primary_name, self.llm)]
+        for name in fallback_names:
+            if name != primary_name:
+                models_to_try.append((name, None))
 
-        for model_name, model in fallback_models:
+        last_error = None
+        from config.settings import get_settings
+        key = get_settings().embedding.google_api_key
+
+        for model_name, model_instance in models_to_try:
+            # Swap or lazily instantiate model
+            if model_instance is None:
+                logger.info(f"⏳ Lazily instantiating fallback model: {model_name}...")
+                try:
+                    from langchain_google_genai import ChatGoogleGenerativeAI
+                    model_instance = ChatGoogleGenerativeAI(
+                        model=model_name,
+                        google_api_key=key,
+                        temperature=0.0,
+                        max_retries=0,
+                    )
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to instantiate lazy model {model_name}: {e}")
+                    continue
+
             try:
                 # Rebuild graph with this model
-                bound = model.bind_tools(self.tools)
+                bound = model_instance.bind_tools(self.tools)
                 
                 # Temporarily swap the bound_llm for the graph invocation
                 original_bound = self.bound_llm
