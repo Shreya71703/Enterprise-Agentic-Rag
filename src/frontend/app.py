@@ -107,7 +107,7 @@ st.markdown(
 # ---------------------------------------------------------------------------
 # Backend Initialization (cached — only runs ONCE across all sessions)
 # ---------------------------------------------------------------------------
-@st.cache_resource(show_spinner=False)
+@st.cache_resource(show_spinner="🧠 Loading Enterprise RAG Engine...")
 def _init_backend():
     """
     Import and initialize all heavy backend services.
@@ -127,9 +127,8 @@ def _init_backend():
     return router, retriever, sql_db
 
 
-# Run backend init immediately at page load (shows a top-level spinner)
-with st.spinner("🧠 Loading Enterprise RAG Engine..."):
-    _router, _retriever, _sql_db = _init_backend()
+# Run backend init immediately at page load (only shows spinner on first boot)
+_router, _retriever, _sql_db = _init_backend()
 
 
 # ---------------------------------------------------------------------------
