@@ -186,17 +186,37 @@ with tab_chat:
                     router = st.session_state["router"]
                     history = st.session_state["chat_history"]
                     
-                    response = router.query(prompt, history=history)
+                    # Retry logic for rate limits
+                    import time as _time
+                    max_retries = 3
+                    response = None
+                    for attempt in range(max_retries):
+                        try:
+                            response = router.query(prompt, history=history)
+                            break
+                        except Exception as retry_err:
+                            err_str = str(retry_err)
+                            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                                wait_secs = 30 * (attempt + 1)
+                                response_placeholder.warning(
+                                    f"⏳ Rate limit hit. Retrying in {wait_secs}s... (attempt {attempt + 1}/{max_retries})"
+                                )
+                                _time.sleep(wait_secs)
+                            else:
+                                raise
                     
-                    # Update message history buffers
-                    st.session_state["chat_history"].append(HumanMessage(content=prompt))
-                    st.session_state["chat_history"].append(AIMessage(content=response))
-                    if len(st.session_state["chat_history"]) > 10:
-                        st.session_state["chat_history"] = st.session_state["chat_history"][-10:]
+                    if response is None:
+                        response_placeholder.error("❌ Rate limit exceeded after retries. Please wait a minute and try again.")
+                    else:
+                        # Update message history buffers
+                        st.session_state["chat_history"].append(HumanMessage(content=prompt))
+                        st.session_state["chat_history"].append(AIMessage(content=response))
+                        if len(st.session_state["chat_history"]) > 10:
+                            st.session_state["chat_history"] = st.session_state["chat_history"][-10:]
 
-                    # Render response
-                    response_placeholder.markdown(response)
-                    st.session_state["messages"].append({"role": "assistant", "content": response})
+                        # Render response
+                        response_placeholder.markdown(response)
+                        st.session_state["messages"].append({"role": "assistant", "content": response})
 
                 except Exception as e:
                     response_placeholder.error(f"Error executing agent query: {e}")

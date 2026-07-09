@@ -12,6 +12,7 @@ State structure maintains conversational history.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Annotated, Any, Sequence, TypedDict
 
 from langchain_core.messages import BaseMessage
@@ -63,13 +64,61 @@ def create_router_llm(google_api_key: str | None = None) -> BaseChatModel:
 
     from langchain_google_genai import ChatGoogleGenerativeAI
 
-    # Using gemini-2.0-flash as default router model for low latency and high quality
+    # Model priority: try gemini-2.5-flash first (highest free-tier quota),
+    # then gemini-2.0-flash-lite as fallback
+    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash-lite", "gemini-2.0-flash"]
+    
+    for model_name in models_to_try:
+        try:
+            model = ChatGoogleGenerativeAI(
+                model=model_name,
+                google_api_key=key,
+                temperature=0.0,
+                max_retries=3,
+            )
+            logger.info(f"✅ Router LLM initialized: {model_name}")
+            return model
+        except Exception as e:
+            logger.warning(f"⚠️  Failed to initialize {model_name}: {e}")
+            continue
+    
+    # If all fail, return the first one anyway and let it error at runtime
     model = ChatGoogleGenerativeAI(
-        model="gemini-2.0-flash",
+        model="gemini-2.5-flash",
         google_api_key=key,
         temperature=0.0,
+        max_retries=3,
     )
     return model
+
+
+# ---------------------------------------------------------------------------
+# Content Extraction Helper
+# ---------------------------------------------------------------------------
+def _extract_text_content(content: Any) -> str:
+    """
+    Extract clean text from Gemini's response content.
+    
+    Gemini 2.5+ may return structured content blocks like:
+        [{'type': 'text', 'text': '...', 'extras': {...}}]
+    instead of a plain string. This normalizes all formats to plain text.
+    """
+    if isinstance(content, str):
+        return content
+    
+    if isinstance(content, list):
+        text_parts = []
+        for block in content:
+            if isinstance(block, dict):
+                if "text" in block:
+                    text_parts.append(block["text"])
+                elif "content" in block:
+                    text_parts.append(str(block["content"]))
+            elif isinstance(block, str):
+                text_parts.append(block)
+        return "\n".join(text_parts) if text_parts else str(content)
+    
+    return str(content)
 
 
 # ---------------------------------------------------------------------------
@@ -164,13 +213,19 @@ class AgenticRouter:
         system_prompt = (
             "You are an Advanced Enterprise RAG System Agent.\n"
             "You have access to structured product metrics tables (SQLite), "
-            "unstructured knowledge bases (Annual Reports & FAQs), and a fallback Web Search.\n"
-            "Analyze the user query and select the appropriate tool. "
-            "If the query requires numbers, sums, categories, comparisons, or counts, "
-            "use the SQLite DB tool.\n"
-            "Always state which tool you are using. Compile the data collected from your tools into "
-            "a helpful, comprehensive final answer. Do not output markdown table formatting if "
-            "it is not needed, but keep data clear."
+            "unstructured knowledge bases (Annual Reports & FAQs), and a fallback Web Search.\n\n"
+            "ROUTING RULES:\n"
+            "- For greetings (hi, hello, hey, etc.), respond directly without calling any tool.\n"
+            "- For general knowledge questions (e.g. 'what is RAG?', 'explain transformers'), "
+            "answer from your own knowledge WITHOUT using any tool.\n"
+            "- For questions about NovaTech, Cortex, company reports, or product details, "
+            "use the search_knowledge_base tool.\n"
+            "- For questions needing numbers, sums, categories, comparisons, or counts "
+            "about product metrics, use the query_product_metrics tool.\n"
+            "- ONLY use web_search for live/recent information that you cannot answer yourself "
+            "(e.g., today's stock price, breaking news).\n\n"
+            "Compile the data collected from your tools into "
+            "a helpful, comprehensive final answer."
         )
 
         messages = [SystemMessage(content=system_prompt)]
@@ -183,4 +238,4 @@ class AgenticRouter:
 
         # Return the content of the final AI message
         final_msg = output_state["messages"][-1]
-        return final_msg.content
+        return _extract_text_content(final_msg.content)
