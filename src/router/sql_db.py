@@ -47,10 +47,28 @@ class SQLDatabaseService:
     ) -> None:
         """
         Load structured metrics from CSV into SQLite table.
+        Skips if table already exists and is populated.
         """
         csv_path = Path(csv_path)
         if not csv_path.exists():
             raise FileNotFoundError(f"CSV not found for SQL bootstrapping: {csv_path}")
+
+        # Check if table is already populated
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.cursor()
+            cursor.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table_name}'")
+            table_exists = cursor.fetchone()
+            if table_exists:
+                cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+                row_count = cursor.fetchone()[0]
+                if row_count > 0:
+                    logger.info(f"ℹ️ SQLite database table '{table_name}' already exists and contains {row_count} rows. Skipping CSV reload.")
+                    return
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to check database status: {e}. Reloading CSV...")
+        finally:
+            conn.close()
 
         logger.info(f"💾 Bootstrapping SQLite database table '{table_name}' from CSV: {csv_path.name}")
 

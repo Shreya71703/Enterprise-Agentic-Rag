@@ -50,11 +50,21 @@ class HybridRetriever:
     def build_bm25_from_vector_store(self, collection_name: str | None = None) -> None:
         """
         Bootstrap the BM25 index by pulling all documents from the Qdrant collection.
-        This allows keyword indexing without requiring raw files to be present on disk.
+        Uses a disk cache (data/bm25_index.pkl) to prevent rebuilding on every start.
         """
+        from config.settings import get_settings
         name = collection_name or self.vector_store.collection_name
-        logger.info(f"📤 Bootstrapping BM25 index from Qdrant collection '{name}'...")
+        cache_path = get_settings().data_dir / "bm25_index.pkl"
 
+        if cache_path.exists():
+            logger.info(f"💾 Loading cached BM25 index from {cache_path}...")
+            try:
+                self.bm25.load(cache_path)
+                return
+            except Exception as e:
+                logger.warning(f"⚠️  Failed to load cached BM25: {e}. Rebuilding...")
+
+        logger.info(f"📤 Bootstrapping BM25 index from Qdrant collection '{name}'...")
         try:
             # Scroll/retrieve all points from Qdrant
             # We fetch a large number (e.g. 10000) to ensure we cover full database
@@ -79,6 +89,12 @@ class HybridRetriever:
 
             self.bm25.build_index(docs)
             logger.info(f"✅ BM25 index populated with {len(docs)} documents scrolled from Qdrant")
+
+            # Cache the index to disk
+            try:
+                self.bm25.save(cache_path)
+            except Exception as e:
+                logger.warning(f"⚠️  Failed to save BM25 index to cache: {e}")
 
         except Exception as e:
             logger.error(f"❌ Failed to build BM25 from Qdrant: {e}")
