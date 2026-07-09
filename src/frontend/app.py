@@ -220,29 +220,31 @@ with tab_chat:
             with st.spinner("Agentic router thinking & retrieving..."):
                 try:
                     history = st.session_state["chat_history"]
-
-                    # Retry logic for rate limits
                     import time as _time
-                    max_retries = 3
+
+                    # The agent internally tries 3 models on rate limit.
+                    # We only retry once at the UI level with a short wait.
                     response = None
-                    for attempt in range(max_retries):
+                    for attempt in range(2):
                         try:
                             response = _router.query(prompt, history=history)
                             break
                         except Exception as retry_err:
                             err_str = str(retry_err)
                             if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                                wait_secs = 30 * (attempt + 1)
-                                response_placeholder.warning(
-                                    f"⏳ Rate limit hit. Retrying in {wait_secs}s... (attempt {attempt + 1}/{max_retries})"
-                                )
-                                _time.sleep(wait_secs)
+                                if attempt == 0:
+                                    response_placeholder.warning("⏳ All models busy. Retrying in 5s...")
+                                    _time.sleep(5)
+                                else:
+                                    response_placeholder.error(
+                                        "❌ API quota exhausted on all models. "
+                                        "Please wait a few minutes or check your API key at "
+                                        "[Google AI Studio](https://aistudio.google.com/apikey)."
+                                    )
                             else:
                                 raise
 
-                    if response is None:
-                        response_placeholder.error("❌ Rate limit exceeded after retries. Please wait a minute and try again.")
-                    else:
+                    if response is not None:
                         # Update message history buffers
                         st.session_state["chat_history"].append(HumanMessage(content=prompt))
                         st.session_state["chat_history"].append(AIMessage(content=response))
@@ -254,7 +256,7 @@ with tab_chat:
                         st.session_state["messages"].append({"role": "assistant", "content": response})
 
                 except Exception as e:
-                    response_placeholder.error(f"Error executing agent query: {e}")
+                    response_placeholder.error(f"Error: {e}")
 
 
 # ---------------------------------------------------------------------------

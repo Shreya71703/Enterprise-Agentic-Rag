@@ -64,17 +64,33 @@ def create_router_llm(google_api_key: str | None = None) -> BaseChatModel:
 
     from langchain_google_genai import ChatGoogleGenerativeAI
 
-    # Model priority: gemini-2.0-flash-lite first (fastest, ~0.5s latency,
-    # separate free-tier quota). gemini-2.5-flash is a "thinking" model with
-    # 5-15s internal reasoning overhead — overkill for routing tasks.
-    model = ChatGoogleGenerativeAI(
-        model="gemini-2.0-flash-lite",
-        google_api_key=key,
-        temperature=0.0,
-        max_retries=3,
-    )
-    logger.info("✅ Router LLM initialized: gemini-2.0-flash-lite")
-    return model
+    # Create multiple models for runtime fallback when rate-limited.
+    # Each has a separate free-tier quota bucket.
+    model_names = ["gemini-2.0-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash"]
+    models = []
+    for name in model_names:
+        try:
+            m = ChatGoogleGenerativeAI(
+                model=name,
+                google_api_key=key,
+                temperature=0.0,
+            )
+            models.append((name, m))
+            logger.info(f"✅ Registered model: {name}")
+        except Exception as e:
+            logger.warning(f"⚠️  Skipping {name}: {e}")
+
+    if not models:
+        logger.error("❌ No Gemini models could be initialized!")
+        models = [("gemini-2.0-flash-lite", ChatGoogleGenerativeAI(
+            model="gemini-2.0-flash-lite", google_api_key=key, temperature=0.0,
+        ))]
+
+    # Store all models on the primary one for fallback access
+    primary_name, primary_model = models[0]
+    primary_model._fallback_models = models  # type: ignore[attr-defined]
+    logger.info(f"✅ Primary router LLM: {primary_name} ({len(models)} fallbacks)")
+    return primary_model
 
 
 # ---------------------------------------------------------------------------
@@ -185,14 +201,9 @@ class AgenticRouter:
     def query(self, user_query: str, history: list[BaseMessage] | None = None) -> str:
         """
         Run the agent graph for a single user query.
-
-        Args:
-            user_query: Search/Question text.
-            history: Message history list.
-
-        Returns:
-            Final text response from the agent.
+        Automatically falls back to alternate Gemini models on rate limits.
         """
+        import time
         from langchain_core.messages import HumanMessage, SystemMessage
 
         system_prompt = (
@@ -218,9 +229,37 @@ class AgenticRouter:
             messages.extend(history)
         messages.append(HumanMessage(content=user_query))
 
-        logger.info(f"🚀 Running agent router graph for query: '{user_query}'")
-        output_state = self.graph.invoke({"messages": messages})
+        # Try each registered model on rate limit failures
+        fallback_models = getattr(self.llm, '_fallback_models', [(self.llm._llm_type, self.llm)])
+        last_error = None
 
-        # Return the content of the final AI message
-        final_msg = output_state["messages"][-1]
-        return _extract_text_content(final_msg.content)
+        for model_name, model in fallback_models:
+            try:
+                # Rebuild graph with this model
+                bound = model.bind_tools(self.tools)
+                
+                # Temporarily swap the bound_llm for the graph invocation
+                original_bound = self.bound_llm
+                self.bound_llm = bound
+                
+                logger.info(f"🚀 Trying model '{model_name}' for query: '{user_query}'")
+                output_state = self.graph.invoke({"messages": messages})
+
+                # Restore and return
+                self.bound_llm = original_bound
+                final_msg = output_state["messages"][-1]
+                return _extract_text_content(final_msg.content)
+
+            except Exception as e:
+                err_str = str(e)
+                self.bound_llm = original_bound  # Restore on error
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    logger.warning(f"⚠️  Rate limit on {model_name}, trying next model...")
+                    last_error = e
+                    time.sleep(2)  # Brief pause before trying next model
+                    continue
+                else:
+                    raise
+
+        # All models exhausted — raise the last rate limit error
+        raise last_error or RuntimeError("All models rate-limited")
