@@ -12,20 +12,17 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+
+# ─── Lightweight imports only (Streamlit loads in ~2s, everything else deferred)
 import streamlit as st
 
 # Add project root to path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-# Initialize services
-from src.router.tools import bootstrap_tools, get_tools_list, _retriever, _sql_db
-from src.router.agent import AgenticRouter
-from langchain_core.messages import HumanMessage, AIMessage
-
 
 # ---------------------------------------------------------------------------
-# Page Layout Configuration
+# Page Layout Configuration (renders IMMEDIATELY, no heavy imports needed)
 # ---------------------------------------------------------------------------
 st.set_page_config(
     page_title="Enterprise RAG System",
@@ -38,17 +35,20 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    /* Dark glassmorphism header */
+    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
+
+    /* Dark glassmorphism base */
     .stApp {
-        background-color: #0b0f19;
+        background: linear-gradient(135deg, #0b0f19 0%, #0f172a 50%, #0b0f19 100%);
         color: #f1f5f9;
+        font-family: 'Outfit', sans-serif;
     }
     .stSidebar {
         background-color: #0e1626;
         border-right: 1px solid #1e293b;
     }
     h1, h2, h3, h4, h5, h6 {
-        color: #6366f1 !important; /* Premium Indigo */
+        color: #6366f1 !important;
         font-family: 'Outfit', sans-serif;
     }
     /* Card borders */
@@ -57,16 +57,17 @@ st.markdown(
     }
     /* Chat bubbles text and background fixes */
     div[data-testid="stChatMessage"] {
-        background-color: #1e293b !important; /* Slate-800 */
+        background-color: #1e293b !important;
         border: 1px solid #2d3748 !important;
         border-radius: 10px !important;
         margin-bottom: 10px !important;
     }
-    div[data-testid="stChatMessage"] p, 
-    div[data-testid="stChatMessage"] span, 
-    div[data-testid="stChatMessage"] li, 
-    div[data-testid="stChatMessage"] code {
-        color: #f1f5f9 !important; /* Off-white for high contrast */
+    div[data-testid="stChatMessage"] p,
+    div[data-testid="stChatMessage"] span,
+    div[data-testid="stChatMessage"] li,
+    div[data-testid="stChatMessage"] code,
+    div[data-testid="stChatMessage"] div {
+        color: #f1f5f9 !important;
     }
     /* Input field text color correction */
     div[data-testid="stChatInput"] textarea {
@@ -85,6 +86,18 @@ st.markdown(
         background-color: #4f46e5;
         box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
     }
+    /* Loading animation */
+    @keyframes pulse-glow {
+        0%, 100% { opacity: 0.6; }
+        50% { opacity: 1; }
+    }
+    .loading-text {
+        animation: pulse-glow 1.5s ease-in-out infinite;
+        color: #6366f1;
+        font-size: 1.1rem;
+        text-align: center;
+        padding: 2rem 0;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -92,16 +105,48 @@ st.markdown(
 
 
 # ---------------------------------------------------------------------------
-# State Management
+# Lazy Backend Initialization (cached — only runs ONCE ever)
 # ---------------------------------------------------------------------------
-if "bootstrapped" not in st.session_state:
-    with st.spinner("Bootstrapping RAG services (Qdrant & SQLite)..."):
-        bootstrap_tools()
-        st.session_state["bootstrapped"] = True
+@st.cache_resource(show_spinner=False)
+def _init_backend():
+    """
+    Lazily import and initialize all heavy backend services.
+    This function is cached by Streamlit so it only executes once
+    across all sessions and page reruns.
+    """
+    from src.router.tools import bootstrap_tools, _retriever, _sql_db
+    from src.router.agent import AgenticRouter
 
-if "router" not in st.session_state:
-    st.session_state["router"] = AgenticRouter()
+    bootstrap_tools()
 
+    # Re-import after bootstrap to get the initialized globals
+    from src.router import tools as _tools_mod
+    retriever = _tools_mod._retriever
+    sql_db = _tools_mod._sql_db
+
+    router = AgenticRouter()
+    return router, retriever, sql_db
+
+
+def _get_backend():
+    """Get or initialize backend — shows a branded loading screen on first call."""
+    if "backend_ready" not in st.session_state:
+        # Show a loading placeholder while backend initializes
+        loading = st.empty()
+        loading.markdown(
+            '<div class="loading-text">🧠 Initializing Enterprise RAG Engine...</div>',
+            unsafe_allow_html=True,
+        )
+        result = _init_backend()
+        loading.empty()
+        st.session_state["backend_ready"] = True
+        return result
+    return _init_backend()
+
+
+# ---------------------------------------------------------------------------
+# Message State (lightweight, no heavy imports)
+# ---------------------------------------------------------------------------
 if "messages" not in st.session_state:
     st.session_state["messages"] = []
 
@@ -110,7 +155,7 @@ if "chat_history" not in st.session_state:
 
 
 # ---------------------------------------------------------------------------
-# Sidebar Content
+# Sidebar Content (renders immediately with placeholder stats)
 # ---------------------------------------------------------------------------
 with st.sidebar:
     st.image("https://img.icons8.com/nolan/128/artificial-intelligence.png", width=70)
@@ -118,31 +163,39 @@ with st.sidebar:
     st.caption("Production-Grade Retrieval-Augmented Generation")
     st.markdown("---")
 
-    # DB Stats
+    # DB Stats (only show after backend is ready)
     st.subheader("📊 Database Statistics")
-    if _retriever and _retriever.vector_store.collection_exists():
-        try:
-            info = _retriever.vector_store.get_collection_info()
-            st.metric("Vector Points", info["points_count"])
-            st.metric("Vector Dimensions", info["dimension"])
-            st.caption(f"Qdrant collection: `{info['name']}`")
-        except Exception:
-            st.warning("Failed to load Qdrant statistics.")
+    if "backend_ready" in st.session_state:
+        _, retriever, sql_db = _init_backend()
+        if retriever and retriever.vector_store.collection_exists():
+            try:
+                info = retriever.vector_store.get_collection_info()
+                st.metric("Vector Points", info["points_count"])
+                st.metric("Vector Dimensions", info["dimension"])
+                st.caption(f"Qdrant collection: `{info['name']}`")
+            except Exception:
+                st.warning("Failed to load Qdrant statistics.")
+        else:
+            st.info("Qdrant collection loading...")
     else:
-        st.warning("Qdrant collection not found.")
+        st.info("⏳ Backend initializing...")
 
     st.markdown("---")
 
     # SQL Schema Explorer
     st.subheader("💾 SQL Schema Explorer")
-    if _sql_db:
-        with st.expander("Show `product_metrics` Table"):
-            st.code(_sql_db.get_schema(), language="sql")
+    if "backend_ready" in st.session_state:
+        _, _, sql_db = _init_backend()
+        if sql_db:
+            with st.expander("Show `product_metrics` Table"):
+                st.code(sql_db.get_schema(), language="sql")
+        else:
+            st.caption("SQL DB not loaded.")
     else:
-        st.caption("SQL DB not loaded.")
+        st.caption("⏳ Waiting for backend...")
 
     st.markdown("---")
-    
+
     # Reload / Reset
     if st.sidebar.button("🗑️ Reset Chat History"):
         st.session_state["messages"] = []
@@ -178,14 +231,18 @@ with tab_chat:
             st.markdown(prompt)
         st.session_state["messages"].append({"role": "user", "content": prompt})
 
+        # Lazy-import message types only when needed
+        from langchain_core.messages import HumanMessage, AIMessage
+
         # Run routing agent
         with st.chat_message("assistant"):
             response_placeholder = st.empty()
             with st.spinner("Agentic router thinking & retrieving..."):
                 try:
-                    router = st.session_state["router"]
+                    # Initialize backend on first query (instant on subsequent)
+                    router, _, _ = _get_backend()
                     history = st.session_state["chat_history"]
-                    
+
                     # Retry logic for rate limits
                     import time as _time
                     max_retries = 3
@@ -204,7 +261,7 @@ with tab_chat:
                                 _time.sleep(wait_secs)
                             else:
                                 raise
-                    
+
                     if response is None:
                         response_placeholder.error("❌ Rate limit exceeded after retries. Please wait a minute and try again.")
                     else:
@@ -233,15 +290,16 @@ with tab_debug:
     debug_k = st.slider("Docs to return (Top-K)", 1, 5, 3)
 
     if st.button("🔍 Run Comparison Search") and debug_query:
-        if _retriever:
+        _, retriever, _ = _get_backend()
+        if retriever:
             col1, col2, col3 = st.columns(3)
 
             # 1. Semantic Search
             with col1:
                 st.markdown("#### 📡 1. Semantic Vector Search")
                 try:
-                    query_emb = _retriever.embedding_service.embed_query(debug_query)
-                    vector_raw = _retriever.vector_store.search_with_documents(query_emb, top_k=debug_k)
+                    query_emb = retriever.embedding_service.embed_query(debug_query)
+                    vector_raw = retriever.vector_store.search_with_documents(query_emb, top_k=debug_k)
                     if not vector_raw:
                         st.info("No semantic results found.")
                     for idx, (doc, score) in enumerate(vector_raw, 1):
@@ -255,7 +313,7 @@ with tab_debug:
             with col2:
                 st.markdown("#### ⌨️ 2. BM25 Keyword Search")
                 try:
-                    bm25_raw = _retriever.bm25.search(debug_query, top_k=debug_k)
+                    bm25_raw = retriever.bm25.search(debug_query, top_k=debug_k)
                     if not bm25_raw:
                         st.info("No keyword results found.")
                     for idx, (doc, score) in enumerate(bm25_raw, 1):
@@ -269,7 +327,7 @@ with tab_debug:
             with col3:
                 st.markdown("#### 🏆 3. Hybrid + Re-ranked")
                 try:
-                    hybrid_raw = _retriever.retrieve(debug_query, top_k=debug_k, use_reranking=True)
+                    hybrid_raw = retriever.retrieve(debug_query, top_k=debug_k, use_reranking=True)
                     if not hybrid_raw:
                         st.info("No hybrid results found.")
                     for idx, (doc, score) in enumerate(hybrid_raw, 1):
