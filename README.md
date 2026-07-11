@@ -126,4 +126,6 @@ enterprise-rag/
 | **SQL DB** | SQLite |
 | **Frontend** | Streamlit |
 
+## License
 
+MIT
