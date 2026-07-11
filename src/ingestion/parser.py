@@ -106,7 +106,14 @@ class DocumentParser:
         logger.info(f"📄 Parsing: {file_path.name}")
 
         if self._partition_fn is not None:
-            return self._parse_with_unstructured(file_path)
+            try:
+                return self._parse_with_unstructured(file_path)
+            except Exception as e:
+                logger.warning(
+                    f"⚠️ Unstructured parsing failed for {file_path.name} ({e}). "
+                    "Falling back to plain text extraction."
+                )
+                return self._parse_fallback(file_path)
         else:
             return self._parse_fallback(file_path)
 

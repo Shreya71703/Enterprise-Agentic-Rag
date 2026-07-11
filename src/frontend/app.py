@@ -56,32 +56,24 @@ def _init_backend():
     return router, retriever, sql_db
 
 
-# Run backend init immediately at page load (only shows spinner on first boot)
-_router, _retriever, _sql_db = _init_backend()
-
-
-# Cache dataframe loading to make all user interactions instantly responsive
+# Define data caching functions at the top level
 @st.cache_data(show_spinner=False)
-def _get_db_df():
+def _get_db_df(sql_db_instance):
     import pandas as pd
-    if _sql_db:
+    if sql_db_instance:
         try:
-            res = _sql_db.execute_query("SELECT * FROM product_metrics")
+            res = sql_db_instance.execute_query("SELECT * FROM product_metrics")
             if res:
                 return pd.DataFrame(res)
         except Exception:
             pass
     return None
 
-db_df = _get_db_df()
-
-
-# Cache Qdrant statistics thread-safely (evicts after 60s) to prevent blocking vector store disk/network calls on every reload
 @st.cache_data(ttl=60, show_spinner=False)
-def _get_vector_stats():
-    if _retriever and _retriever.vector_store.collection_exists():
+def _get_vector_stats(retriever_instance):
+    if retriever_instance and retriever_instance.vector_store.collection_exists():
         try:
-            info = _retriever.vector_store.get_collection_info()
+            info = retriever_instance.vector_store.get_collection_info()
             return {
                 "exists": True,
                 "points_count": info['points_count'],
@@ -92,17 +84,19 @@ def _get_vector_stats():
             pass
     return {"exists": False}
 
-vector_stats = _get_vector_stats()
-
-
-# Cache SQL schema queries thread-safely to prevent SQLite connection overhead on every reload
 @st.cache_data(show_spinner=False)
-def _get_sql_schema_cached():
-    if _sql_db:
-        return _sql_db.get_schema()
+def _get_sql_schema_cached(sql_db_instance):
+    if sql_db_instance:
+        return sql_db_instance.get_schema()
     return None
 
-sql_schema = _get_sql_schema_cached()
+
+# Execute initialization and evaluations inside a spinner to prevent black screen websocket blocks
+with st.spinner("🔮 Bootstrapping AI Router, Ingesting Documents & Initializing Vector Store... (Takes ~20s on first load)"):
+    _router, _retriever, _sql_db = _init_backend()
+    db_df = _get_db_df(_sql_db)
+    vector_stats = _get_vector_stats(_retriever)
+    sql_schema = _get_sql_schema_cached(_sql_db)
 
 
 # ---------------------------------------------------------------------------
