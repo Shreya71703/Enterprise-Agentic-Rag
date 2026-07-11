@@ -8,7 +8,7 @@ langchain-huggingface>=0.1.0
 langgraph>=0.2.0
 
 # Document Parsing & Embeddings
-unstructured>=0.16.0
+unstructured[all-docs]>=0.16.0
 sentence-transformers>=3.0.0
 
 # Datastores

@@ -1,4 +1,7 @@
 [server]
+headless = true
+enableCORS = false
+enableXsrfProtection = false
 fileWatcherType = "none"
 runOnSave = false
 
