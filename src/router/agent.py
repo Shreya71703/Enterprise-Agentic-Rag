@@ -24,7 +24,12 @@ from langgraph.prebuilt import ToolNode
 from config.settings import get_settings
 from src.router.tools import get_tools_list
 
+import threading
+
 logger = logging.getLogger(__name__)
+
+# Thread-local storage to track step latencies thread-safely
+_thread_local = threading.local()
 
 
 # ---------------------------------------------------------------------------
@@ -142,16 +147,17 @@ class AgenticRouter:
         # Build the graph
         self.graph = self._build_graph()
 
+        # Instantiate Semantic Cache
+        from src.router.semantic_cache import SemanticCacheService
+        self.cache = SemanticCacheService()
+
     def _build_graph(self) -> StateGraph:
         """Compile nodes and conditional edges into a LangGraph runner."""
         workflow = StateGraph(AgentState)
 
         # Define nodes
         workflow.add_node("agent", self._agent_node)
-        
-        # Tools node
-        tool_node = ToolNode(self.tools)
-        workflow.add_node("tools", tool_node)
+        workflow.add_node("tools", self._tools_node)  # Use timed custom tools node
 
         # Connect paths
         workflow.add_edge(START, "agent")
@@ -175,10 +181,42 @@ class AgenticRouter:
     # Node logic
     # -------------------------------------------------------------------
     def _agent_node(self, state: AgentState) -> dict[str, Any]:
-        """Node executing the primary LLM call."""
+        """Node executing the primary LLM call with latency measurement."""
+        import time
         logger.info("🤖 Routing agent node triggered")
+        t0 = time.time()
         response = self.bound_llm.invoke(state["messages"])
+        t1 = time.time()
+
+        # Identify query type based on message history
+        step_name = "LLM Synthesis" if len(state["messages"]) > 3 else "LLM Agentic Router"
+        
+        if not hasattr(_thread_local, "steps"):
+            _thread_local.steps = []
+        _thread_local.steps.append({
+            "name": step_name,
+            "latency_ms": int((t1 - t0) * 1000)
+        })
+
         return {"messages": [response]}
+
+    def _tools_node(self, state: AgentState) -> dict[str, Any]:
+        """Custom tools execution node to measure performance latency."""
+        import time
+        logger.info("⚙️ Timed tools node triggered")
+        t0 = time.time()
+        tool_node = ToolNode(self.tools)
+        res = tool_node.invoke(state)
+        t1 = time.time()
+
+        if not hasattr(_thread_local, "steps"):
+            _thread_local.steps = []
+        _thread_local.steps.append({
+            "name": "Datastores & Tools Execution",
+            "latency_ms": int((t1 - t0) * 1000)
+        })
+
+        return res
 
     @staticmethod
     def _should_continue(state: AgentState) -> str:
@@ -196,13 +234,44 @@ class AgenticRouter:
     # -------------------------------------------------------------------
     # Public Execution API
     # -------------------------------------------------------------------
-    def query(self, user_query: str, history: list[BaseMessage] | None = None) -> str:
+    def query(
+        self,
+        user_query: str,
+        history: list[BaseMessage] | None = None,
+        return_trace: bool = False
+    ) -> str | tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
         """
         Run the agent graph for a single user query.
         Automatically falls back to alternate Gemini models on rate limits.
         """
         import time
         from langchain_core.messages import HumanMessage, SystemMessage
+
+        # Reset thread-local latency steps for this specific query run
+        _thread_local.steps = []
+
+        # ─── 1. Semantic Cache Lookup (Only run on single queries to prevent dialogue context leaks)
+        query_emb = None
+        if not history:
+            from src.router import tools as _tools_mod
+            retriever = _tools_mod._retriever
+            if retriever:
+                try:
+                    query_emb = retriever.embedding_service.embed_query(user_query)
+                    cached_response = self.cache.lookup(user_query, query_emb)
+                    if cached_response is not None:
+                        # Construct simulated trace & cache hit latency stats
+                        trace = [
+                            {"type": "call", "tool": "semantic_cache", "args": {"query": user_query}},
+                            {"type": "result", "tool": "semantic_cache", "result": "⚡ Semantic Cache hit: retrieved answer instantly"}
+                        ]
+                        latencies = [{"name": "⚡ Semantic Cache Hit", "latency_ms": 5}]
+                        
+                        if return_trace:
+                            return cached_response, trace, latencies
+                        return cached_response
+                except Exception as cache_err:
+                    logger.warning(f"⚠️ Semantic Cache lookup failed: {cache_err}")
 
         system_prompt = (
             "You are an Advanced Enterprise RAG System Agent.\n"
@@ -271,7 +340,50 @@ class AgenticRouter:
                 # Restore and return
                 self.bound_llm = original_bound
                 final_msg = output_state["messages"][-1]
-                return _extract_text_content(final_msg.content)
+                response_content = _extract_text_content(final_msg.content)
+
+                if return_trace:
+                    # Construct routing trace list from state messages
+                    trace = []
+                    for msg in output_state["messages"]:
+                        # Tool calls made by AI
+                        if hasattr(msg, "tool_calls") and msg.tool_calls:
+                            for tc in msg.tool_calls:
+                                trace.append({
+                                    "type": "call",
+                                    "tool": tc.get("name"),
+                                    "args": tc.get("args")
+                                })
+                        # Tool execution results
+                        elif msg.__class__.__name__ == "ToolMessage" or getattr(msg, "type", None) == "tool":
+                            raw_content = str(msg.content)
+                            content_preview = raw_content[:200] + "..." if len(raw_content) > 200 else raw_content
+                            trace.append({
+                                "type": "result",
+                                "tool": getattr(msg, "name", "unknown"),
+                                "result": content_preview
+                            })
+                    
+                    # Gather timed steps from thread-local storage
+                    latencies = getattr(_thread_local, "steps", [])
+                    
+                    # Store in semantic cache for future queries
+                    if query_emb is not None:
+                        try:
+                            self.cache.store(user_query, response_content, query_emb)
+                        except Exception as cache_store_err:
+                            logger.warning(f"Failed to cache query: {cache_store_err}")
+                            
+                    return response_content, trace, latencies
+
+                # Store in semantic cache for future queries
+                if query_emb is not None:
+                    try:
+                        self.cache.store(user_query, response_content, query_emb)
+                    except Exception as cache_store_err:
+                        logger.warning(f"Failed to cache query: {cache_store_err}")
+
+                return response_content
 
             except Exception as e:
                 err_str = str(e)

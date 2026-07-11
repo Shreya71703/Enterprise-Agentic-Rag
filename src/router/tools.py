@@ -128,10 +128,14 @@ def query_product_metrics(sql_query: str) -> str:
     if not res:
         return "Query returned 0 rows."
 
-    # Return formatted table string
-    import pandas as pd
-    df = pd.DataFrame(res)
-    return df.to_markdown(index=False)
+    # Return formatted table string using pure Python to avoid optional dependency on tabulate
+    headers = list(res[0].keys())
+    lines = []
+    lines.append("| " + " | ".join(headers) + " |")
+    lines.append("| " + " | ".join(["---"] * len(headers)) + " |")
+    for row in res:
+        lines.append("| " + " | ".join(str(row.get(h, "")) for h in headers) + " |")
+    return "\n".join(lines)
 
 
 @tool
