@@ -23,9 +23,12 @@ from src.vectorstore import QdrantVectorStore
 logger = logging.getLogger(__name__)
 
 
+import threading
+
 # ---------------------------------------------------------------------------
 # Tool instances & bootstrap helper
 # ---------------------------------------------------------------------------
+_bootstrap_lock = threading.Lock()
 _retriever: HybridRetriever | None = None
 _sql_db: SQLDatabaseService | None = None
 
@@ -34,43 +37,44 @@ def bootstrap_tools(collection_name: str = "enterprise_rag_docs") -> None:
     """Initialize singleton tool services with self-bootstrapping datastores."""
     global _retriever, _sql_db
     
-    if _retriever is not None:
-        logger.info("ℹ️  Retriever already initialized. Skipping bootstrap.")
-        return
+    with _bootstrap_lock:
+        if _retriever is not None:
+            logger.info("ℹ️  Retriever already initialized. Skipping bootstrap.")
+            return
 
-    # 1. Setup Hybrid retriever
-    from config.settings import get_settings
-    embedding_service = EmbeddingService()
-    vector_store = QdrantVectorStore(mode="disk", collection_name=collection_name)
+        # 1. Setup Hybrid retriever
+        from config.settings import get_settings
+        embedding_service = EmbeddingService()
+        vector_store = QdrantVectorStore(mode="disk", collection_name=collection_name)
 
-    # Auto-bootstrap Vector embeddings if database collection starts empty (e.g. on Cloud Deployments)
-    collection_empty = True
-    try:
-        if vector_store.collection_exists():
-            info = vector_store.get_collection_info()
-            if info.get("points_count", 0) > 0:
-                collection_empty = False
-    except Exception:
-        pass
-
-    if collection_empty:
-        logger.info("⚠️  Qdrant VDB starts empty. Auto-bootstrapping raw documents ingestion...")
+        # Auto-bootstrap Vector embeddings if database collection starts empty (e.g. on Cloud Deployments)
+        collection_empty = True
         try:
-            from src.ingestion.pipeline import IngestionPipeline
-            raw_dir = get_settings().data_dir / "sample_docs"
-            if raw_dir.exists():
-                pipeline = IngestionPipeline()
-                docs = pipeline.run(input_dir=raw_dir)
-                if docs:
-                    logger.info(f"   📥 Embedding and storing {len(docs)} chunks into Qdrant...")
-                    embeddings = [embedding_service.embed_query(d.page_content) for d in docs]
-                    vector_store.add_documents(docs, embeddings)
-                    logger.info("✅ Qdrant VDB auto-bootstrapped successfully.")
-        except Exception as e:
-            logger.error(f"❌ Qdrant VDB auto-bootstrap failed: {e}")
+            if vector_store.collection_exists():
+                info = vector_store.get_collection_info()
+                if info.get("points_count", 0) > 0:
+                    collection_empty = False
+        except Exception:
+            pass
 
-    _retriever = HybridRetriever(vector_store, embedding_service)
-    _retriever.build_bm25_from_vector_store()
+        if collection_empty:
+            logger.info("⚠️  Qdrant VDB starts empty. Auto-bootstrapping raw documents ingestion...")
+            try:
+                from src.ingestion.pipeline import IngestionPipeline
+                raw_dir = get_settings().data_dir / "sample_docs"
+                if raw_dir.exists():
+                    pipeline = IngestionPipeline()
+                    docs = pipeline.run(input_dir=raw_dir)
+                    if docs:
+                        logger.info(f"   📥 Embedding and storing {len(docs)} chunks into Qdrant...")
+                        embeddings = embedding_service.embed_texts([d.page_content for d in docs])
+                        vector_store.upsert_documents(docs, embeddings)
+                        logger.info("✅ Qdrant VDB auto-bootstrapped successfully.")
+            except Exception as e:
+                logger.error(f"❌ Qdrant VDB auto-bootstrap failed: {e}")
+
+        _retriever = HybridRetriever(vector_store, embedding_service)
+        _retriever.build_bm25_from_vector_store()
 
     # 2. Setup SQLite DB
     _sql_db = SQLDatabaseService()
